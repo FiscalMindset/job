@@ -1,0 +1,29 @@
+# Environment
+.env
+venv/
+env/
+*.pyc
+__pycache__/
+.pytest_cache/
+.coverage
+*.egg-info/
+
+# Data
+data/
+logs/
+*.csv
+*.db
+*.sqlite
+*.sqlite3
+backups/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Debugging
+raw_html/
+debug/
