@@ -2,7 +2,7 @@
 
 **A production-ready, autonomous job application automation system powered by AI.**
 
-[![Demo](https://img.shields.io/badge/▶️_Watch-Demo-red?style=for-the-badge&logo=youtube)](https://youtu.be/qjhPPWucufU)
+[![Demo](https://img.shields.io/badge/▶️_Watch-Demo-red?style=for-the-badge&logo=youtube)](https://youtu.be/DP0ZvabylzM)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue?style=flat-square&logo=python)](https://python.org)
 [![Ollama](https://img.shields.io/badge/LLM-Ollama-green?style=flat-square)](https://ollama.ai)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
@@ -11,9 +11,9 @@
 
 **Watch the system in action:**
 
-[![Job Intelligence OS Demo](https://img.youtube.com/vi/qjhPPWucufU/maxresdefault.jpg)](https://youtu.be/qjhPPWucufU)
+[![Job Intelligence OS Demo](https://img.youtube.com/vi/DP0ZvabylzM/maxresdefault.jpg)](https://youtu.be/DP0ZvabylzM)
 
-👉 [**Click to watch the full demo video**](https://youtu.be/qjhPPWucufU) - See how the system collects jobs from LinkedIn, GitHub, Naukri, YCombinator, and Wellfound, scores them with AI, and generates personalized outreach emails.
+👉 [**Click to watch the full demo video**](https://youtu.be/DP0ZvabylzM) - See how the system collects jobs from LinkedIn, GitHub, Naukri, YCombinator, and Wellfound, scores them with AI, and generates personalized outreach emails.
 
 ## ✨ What This Is
 
