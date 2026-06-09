@@ -434,6 +434,6 @@ Built for reliability, not novelty. Production-ready, not prototype.
 
 **⭐ Star this repo if you find it useful!**
 
-Made with ❤️ by [Vicky Kumar](https://github.com/algsoch)
+Made by [Vicky Kumar](https://github.com/algsoch)
 
 </div>
