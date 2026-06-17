@@ -4,30 +4,12 @@
 
 ---
 
-## Table of Contents
+## 📑 Architecture Tabs
 
-1. [Entry Point: CLI](#1-entry-point-cli)
-2. [Configuration & Initialization](#2-configuration--initialization)
-3. [Profile Analysis](#3-profile-analysis)
-4. [Pipeline Engine](#4-pipeline-engine)
-5. [Collection Phase](#5-collection-phase)
-6. [Deduplication Phase](#6-deduplication-phase)
-7. [Enrichment Phase](#7-enrichment-phase)
-8. [Scoring Phase](#8-scoring-phase)
-9. [Decision Phase](#9-decision-phase)
-10. [Outreach Phase](#10-outreach-phase)
-11. [Storage Phase](#11-storage-phase)
-12. [Observability](#12-observability)
-13. [Error Handling & Reliability](#13-error-handling--reliability)
-14. [CLI Commands Reference](#14-cli-commands-reference)
+<details open>
+<summary><strong>⚙️ 1. Entry Point — CLI</strong></summary>
 
----
-
-## 1. Entry Point: CLI
-
-**File:** `cli.py`
-
-The system is invoked via `python3 cli.py run`. The CLI is built with **Typer** and provides these commands:
+The system is invoked via `python3 cli.py run`. Built with **Typer**.
 
 | Command | Description |
 |---------|-------------|
@@ -44,23 +26,14 @@ The system is invoked via `python3 cli.py run`. The CLI is built with **Typer** 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '14px'}}}%%
 flowchart TD
-    CLI["python3 cli.py run"]
-    CFG["config.validate_config()"]
-    PROFILE["ProfileReportGenerator<br/>Deep GitHub + LinkedIn Analysis"]
-    ENGINE["_init_engine()"]
-    PIPELINE["engine.run()"]
-    REPORT["Display PipelineResult<br/>Rich tables, charts, stats"]
-    BACKUP["CSVStore.backup()"]
-
-    CLI --> CFG
-    CFG -->|Dry run or valid config| PROFILE
-    CFG -->|Config errors + live mode| ERROR[Exit with errors]
-    PROFILE --> ENGINE
-    ENGINE --> PIPELINE
-    PIPELINE --> REPORT
-    REPORT --> BACKUP
-
-    style CLI fill:#6366f1,color:#fff,stroke:#4338ca
+    CLI["python3 cli.py run"] --> CFG["config.validate_config()"]
+    CFG -->|valid| PROFILE["ProfileReportGenerator<br/>GitHub + LinkedIn Analysis"]
+    CFG -->|errors + live mode| ERROR[Exit with errors]
+    PROFILE --> ENGINE["_init_engine()<br/>wire components"]
+    ENGINE --> PIPELINE["engine.run()"]
+    PIPELINE --> REPORT["Display PipelineResult<br/>Rich tables + charts"]
+    REPORT --> BACKUP["CSVStore.backup()"]
+    style CLI fill:#6366f1,color:#fff
     style CFG fill:#f59e0b,color:#000
     style PROFILE fill:#0891b2,color:#fff
     style ENGINE fill:#059669,color:#fff
@@ -69,77 +42,66 @@ flowchart TD
     style BACKUP fill:#d97706,color:#fff
 ```
 
-### Key Code Path
+### Key Code
 
 ```python
 # cli.py:81-186
 @app.command()
 def run(sources="all", dry_run=False):
     setup_logging()
-    errors = config.validate_config()       # 1. Validate .env
-    if errors and not dry_run:              # 2. Exit if bad config (live mode)
+    errors = config.validate_config()          # 1. Validate .env
+    if errors and not dry_run:
         raise typer.Exit(1)
 
-    profile_gen = ProfileReportGenerator()  # 3. Deep profile analysis
+    profile_gen = ProfileReportGenerator()      # 2. Profile analysis
     profile_report = profile_gen.generate_report()
     profile_gen.save_report(profile_report)
 
-    engine = _init_engine(dry_run=dry_run)  # 4. Wire up components
-    result = engine.run(sources=source_list) # 5. Execute pipeline
+    engine = _init_engine(dry_run=dry_run)      # 3. Wire components
+    result = engine.run(sources=source_list)    # 4. Execute pipeline
 
-    _display_detailed_job_report(result.all_jobs)  # 6. Rich terminal output
-    csv_store.backup()                       # 7. Daily backup
+    _display_detailed_job_report(result.all_jobs)  # 5. Terminal output
+    csv_store.backup()                          # 6. Daily backup
 ```
+
+</details>
 
 ---
 
-## 2. Configuration & Initialization
+<details>
+<summary><strong>🔧 2. Configuration & Initialization</strong></summary>
 
-**File:** `config.py`
-
-The system loads configuration from a `.env` file using `python-dotenv`. Key configuration groups:
-
-### Collector Configuration
+Loaded from `.env` via `python-dotenv`. Key groups:
 
 ```python
-# Which sources to scrape (comma-separated)
+# Which sources to scrape
 ENABLED_COLLECTORS = ["linkedin", "ycombinator", "angellist", "wellfound"]
-```
 
-### Job Preferences
-
-```python
+# Job preferences
 TARGET_ROLES = ["AI Engineer"]
 YOUR_SKILLS = ["Python"]
-PREFERRED_LOCATIONS = ["San Francisco", "Remote"]
-```
 
-### Thresholds
-
-```python
+# Decision thresholds
 APPLY_THRESHOLD = 75     # Score >= 75 → APPLY
-APPLY_LATER_THRESHOLD = 50  # Score >= 50 → APPLY_LATER
-WATCH_THRESHOLD = 30     # Score >= 30 → WATCH
+APPLY_LATER_THRESHOLD = 50
+WATCH_THRESHOLD = 30
 ```
 
 ### Engine Initialization
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '13px'}}}%%
 flowchart LR
     subgraph init["_init_engine()"]
         direction TB
-        C["for source in ENABLED_COLLECTORS:<br/>collectors.append(SourceCollector())"]
-        D[JobDecider<br/>use_llm=True]
+        C["collectors.append(SourceCollector())"]
+        D[JobDecider]
         E[EmailFinder]
         S[EmailSender]
         CS[CSVStore]
         SQ[SQLiteStore]
         M[Metrics]
     end
-
-    init --> ENGINE[JobEngine<br/>collectors + decider + sender + stores + metrics]
-
+    init --> ENGINE[JobEngine]
     style C fill:#f97316,color:#fff
     style D fill:#7c3aed,color:#fff
     style E fill:#0891b2,color:#fff
@@ -150,121 +112,91 @@ flowchart LR
     style ENGINE fill:#6366f1,color:#fff
 ```
 
-### Data Flow in Engine
-
 ```python
-# core/engine.py
 class JobEngine:
     def __init__(self, collectors, decider, email_finder, email_sender,
                  csv_store, sqlite_store, metrics, dry_run=False):
-        self.collectors = collectors    # List[BaseCollector]
-        self.decider = decider          # JobDecider
-        self.email_finder = email_finder  # EmailFinder
-        self.email_sender = email_sender  # EmailSender
-        self.csv_store = csv_store      # CSVStore
-        self.sqlite_store = sqlite_store  # SQLiteStore
-        self.metrics = metrics          # Metrics
-        self.dry_run = dry_run          # bool
+        self.collectors = collectors     # List[BaseCollector]
+        self.decider = decider           # JobDecider
+        self.email_finder = email_finder # EmailFinder
+        self.email_sender = email_sender # EmailSender
+        self.csv_store = csv_store       # CSVStore
+        self.sqlite_store = sqlite_store # SQLiteStore
+        self.metrics = metrics           # Metrics
+        self.dry_run = dry_run           # bool
 ```
+
+</details>
 
 ---
 
-## 3. Profile Analysis
+<details>
+<summary><strong>📊 3. Profile Analysis</strong></summary>
 
-**File:** `enrichment/profile_report.py`
-
-Before the pipeline runs, the system performs a deep analysis of the user's online presence:
+Before the pipeline, the system analyzes your online presence.
 
 ### GitHub Analysis
 
-1. Fetches ALL repositories via GitHub REST API (`/users/{username}/repos`)
-2. Extracts: name, description, stars, forks, language, topics
-3. Generates AI insights using Ollama (analyzes top 10 repos)
-4. Saves results to `enrichment/github_analysis_{date}.csv`
+Fetches ALL repos via `GET /users/{username}/repos`, extracts stars, forks, language, topics, generates AI insights via Ollama. Saved to `enrichment/github_analysis_{date}.csv`.
 
 ### LinkedIn Analysis
 
-1. Launches Playwright (headless Chromium) to scrape the public profile
-2. Extracts: name, headline, activity posts
-3. Scans posts for **hiring keywords** (e.g., "hiring", "job opening", "we are looking for")
-4. If hiring opportunities detected → auto-sends email alert
-5. Saves results to `enrichment/linkedin_analysis_{date}.csv`
+Launches Playwright headless Chromium, scrapes public profile, scans posts for hiring keywords ("hiring", "we are looking for", etc.). Auto-sends email alert if opportunities found.
 
-### Profile Report Output
-
-Saved to `data/profile_report_{timestamp}.json` containing:
+### Output
 
 ```json
 {
-  "profile": {"name", "title", "github", "linkedin"},
+  "profile": {"name": "Vicky Kumar", "github": "...", "linkedin": "..."},
   "github_analysis": {"all_repos": [...], "languages_breakdown": {...}},
-  "linkedin_analysis": {"posts": [...], "hiring_opportunities": [...]},
-  "projects": [...],
-  "skills": [...],
-  "target_roles": [...]
+  "linkedin_analysis": {"posts": [...], "hiring_opportunities": [...]}
 }
 ```
 
+</details>
+
 ---
 
-## 4. Pipeline Engine
+<details>
+<summary><strong>⚡ 4. Pipeline Engine</strong></summary>
 
-**File:** `core/engine.py`
-
-The `engine.run()` method orchestrates the entire pipeline through these phases:
+`engine.run()` orchestrates 7 phases:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '14px'}}}%%
 flowchart LR
-    COLLECT["1️⃣ Collect<br/>Multi-source"]
-    DEDUP["2️⃣ Deduplicate<br/>SHA-256"]
-    ENRICH["3️⃣ Enrich<br/>Email Discovery"]
-    SCORE["4️⃣ Score<br/>Rules + LLM"]
-    DECIDE["5️⃣ Decide<br/>APPLY/SKIP"]
-    SEND["6️⃣ Send<br/>SMTP Email"]
-    STORE["7️⃣ Store<br/>CSV + SQLite"]
-
-    COLLECT --> DEDUP
-    DEDUP --> ENRICH
-    ENRICH --> SCORE
-    SCORE --> DECIDE
-    DECIDE --> SEND
-    SEND --> STORE
-
-    style COLLECT fill:#0ea5e9,color:#fff
-    style DEDUP fill:#f59e0b,color:#000
-    style ENRICH fill:#0891b2,color:#fff
-    style SCORE fill:#7c3aed,color:#fff
-    style DECIDE fill:#6366f1,color:#fff
+    C["1️⃣ Collect"] --> D["2️⃣ Dedup"] --> E["3️⃣ Enrich"] --> S["4️⃣ Score"]
+    S --> DEC["5️⃣ Decide"] --> SEND["6️⃣ Send"] --> STORE["7️⃣ Store"]
+    style C fill:#0ea5e9,color:#fff
+    style D fill:#f59e0b,color:#000
+    style E fill:#0891b2,color:#fff
+    style S fill:#7c3aed,color:#fff
+    style DEC fill:#6366f1,color:#fff
     style SEND fill:#ef4444,color:#fff
     style STORE fill:#059669,color:#fff
 ```
 
 ### PipelineResult
 
-After execution, the engine returns a `PipelineResult`:
-
 ```python
 @dataclass
 class PipelineResult:
-    jobs_collected: int       # Total jobs from all sources
-    jobs_deduplicated: int    # New jobs after dedup
-    jobs_enriched: int        # Jobs with emails found
-    jobs_scored: int          # Jobs that got a score
+    jobs_collected: int       # Total from all sources
+    jobs_deduplicated: int    # New after dedup
+    jobs_enriched: int        # With emails found
+    jobs_scored: int          # With scores assigned
     decisions_made: dict      # {Decision.APPLY: 5, Decision.SKIP: 10}
-    emails_sent: int          # Successful emails
-    duration_seconds: float   # Pipeline wall time
+    emails_sent: int          # Successful sends
+    duration_seconds: float   # Wall time
     source_stats: dict        # {linkedin: 164, ycombinator: 0}
-    all_jobs: list            # All Job objects for reporting
+    all_jobs: list            # All Job objects
 ```
+
+</details>
 
 ---
 
-## 5. Collection Phase
-
-**File:** `collectors/`
-
-### Architecture
+<details>
+<summary><strong>🌐 5. Collection Phase</strong></summary>
 
 All collectors inherit from `BaseCollector`:
 
@@ -275,80 +207,33 @@ class BaseCollector(ABC):
             return self._collect_impl()
 ```
 
-### Collector: LinkedIn
+| Collector | Method | Notes |
+|-----------|--------|-------|
+| **LinkedIn** | HTTP scraper + BS4 | 429 retry w/ backoff, 5 pages |
+| **Y Combinator** | JSON API | workatastartup.com |
+| **Wellfound** | HTTP scraper | May get 403, circuit breaker opens |
+| **GitHub** | REST API v3 | 60 req/hr (unauthed), 5k req/hr (token) |
+| **Naukri** | HTTP scraper | BS4 parsing |
 
-**File:** `collectors/linkedin.py`
-
-- HTTP scraper (no Playwright for job search)
-- Searches LinkedIn Jobs with keywords + location
-- Handles pagination (up to 5 pages)
-- Parses HTML with BeautifulSoup
-- **Rate limit handling:** 429 responses trigger retry with backoff
-
-```python
-class LinkedInCollector(BaseCollector):
-    def _collect_impl(self):
-        for keyword in config.TARGET_ROLES:
-            for location in config.PREFERRED_LOCATIONS:
-                for page in range(1, 6):
-                    jobs = self._scrape_page(keyword, location, page)
-                    all_jobs.extend(jobs)
-```
-
-### Collector: Y Combinator
-
-**File:** `collectors/ycombinator.py`
-
-- Scrapes `https://www.workatastartup.com/jobs`
-- Parses JSON API responses
-- Filters by target roles
-
-### Collector: Wellfound (AngelList)
-
-**File:** `collectors/wellfound.py`
-
-- HTTP scraper
-- May receive 403 errors (anti-bot protection)
-- Falls back gracefully (circuit breaker opens)
-
-### Collector: GitHub
-
-**File:** `collectors/github.py`
-
-- Uses GitHub REST API v3
-- Searches for: "hiring" in README, GitHub Issues with job tags
-- 60 req/hr without token, 5000 req/hr with `GITHUB_TOKEN`
-
-### Collector: Naukri
-
-**File:** `collectors/naukri.py`
-
-- Scrapes India's largest job portal
-- HTML parsing with BeautifulSoup
-
-### Collection Error Handling
+### Error Isolation
 
 ```python
-# One source failing does NOT crash the pipeline:
 try:
     jobs = collector.collect()
 except Exception as e:
     logger.error(f"{name} failed: {e}")
     collector.circuit_breaker.record_failure()
-    continue  # Move to next source
+    continue  # Other sources still run
 ```
+
+</details>
 
 ---
 
-## 6. Deduplication Phase
+<details>
+<summary><strong>🆔 6. Deduplication Phase</strong></summary>
 
-**File:** `core/engine.py` (inline in `run()`)
-
-### How It Works
-
-1. Each job generates a deterministic `job_id` via SHA-256 hash
-2. Existing job IDs are loaded from CSV
-3. New jobs are filtered against existing IDs
+SHA-256 hash of `company + role + url`:
 
 ```python
 def generate_id(self) -> str:
@@ -357,395 +242,258 @@ def generate_id(self) -> str:
 
 # In engine:
 existing_ids = set(csv_store.get_existing_job_ids())
-new_jobs = [job for job in all_jobs if job.job_id not in existing_ids]
+new_jobs = [j for j in all_jobs if j.job_id not in existing_ids]
 ```
-
-### Why SHA-256?
 
 | Property | Benefit |
 |----------|---------|
-| Deterministic | Same input → same ID every time |
-| Collision-resistant | Virtually impossible to hash two different jobs same |
+| Deterministic | Same input → same ID |
+| Collision-resistant | No false dedups |
 | Fast | Microseconds per hash |
-| No DB needed | Just compare against a set of strings |
+
+</details>
 
 ---
 
-## 7. Enrichment Phase
+<details>
+<summary><strong>📧 7. Enrichment — Email Finder</strong></summary>
 
-**File:** `enrichment/email_finder.py`
-
-### Email Discovery Strategy
-
-The `EmailFinder` uses a multi-strategy approach:
+Multi-strategy email discovery:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '13px'}}}%%
 flowchart TD
-    JOB[Job<br/>company + job_url] --> DISCOVER[_discover_domain]
-    
-    DISCOVER --> URL{Extract domain<br/>from job URL?}
+    JOB[Job] --> DISCOVER[_discover_domain]
+    DISCOVER --> URL{from job URL?}
     URL -->|Yes| DOMAIN[Use hostname]
-    URL -->|No| KNOWN{In KNOWN_DOMAINS<br/>map?}
+    URL -->|No| KNOWN{KNOWN_DOMAINS?}
     KNOWN -->|Yes| DOMAIN
-    KNOWN -->|No| NAME[_extract_domain_from_name<br/>Try .com/.io/.ai/.co]
-    
-    DOMAIN --> PATTERNS[Try common patterns<br/>jobs@domain]
-    PATTERNS --> |Found| RETURN[Return email]
-    PATTERNS --> SCRAPE[_scrape_company_website<br/>/careers /jobs /contact]
-    SCRAPE --> |Found| RETURN
-    SCRAPE --> JOBPAGE[_extract_from_job_page<br/>Parse posting URL]
-    JOBPAGE --> |Found| RETURN
-    JOBPAGE --> FAIL[Return None]
-
-    style JOB fill:#f59e0b,color:#000
-    style DISCOVER fill:#6366f1,color:#fff
-    style DOMAIN fill:#059669,color:#fff
-    style KNOWN fill:#0891b2,color:#fff
-    style NAME fill:#d97706,color:#fff
-    style PATTERNS fill:#7c3aed,color:#fff
-    style SCRAPE fill:#0891b2,color:#fff
-    style JOBPAGE fill:#4f46e5,color:#fff
-    style RETURN fill:#22c55e,color:#000
-    style FAIL fill:#ef4444,color:#fff
+    KNOWN -->|No| NAME[name → domain]
+    DOMAIN --> PATTERNS[jobs@domain]
+    PATTERNS -->|found| RETURN[✓]
+    PATTERNS --> SCRAPE[/careers /jobs /contact]
+    SCRAPE -->|found| RETURN
+    SCRAPE --> JOBPAGE[parse job posting]
+    JOBPAGE -->|found| RETURN
+    JOBPAGE --> FAIL[None]
 ```
 
 ### Domain Discovery
 
 ```python
 def _discover_domain(self, job: Job) -> Optional[str]:
-    # Strategy 1: Extract from job URL (e.g., careers.sievecorp.com)
+    # 1. Extract from job URL (e.g., careers.sievecorp.com)
     domain = self._extract_domain_from_url(job.job_url)
     if domain:
         return domain
 
-    # Strategy 2: Known domain mapping
+    # 2. Known domain mapping (50+ companies)
     if company_key in self.KNOWN_DOMAINS:
         return self.KNOWN_DOMAINS[company_key]
 
-    # Strategy 3: Generate from company name
+    # 3. Generate from company name (try .com/.io/.ai/.co/.dev/.app)
     return self._extract_domain_from_name(job.company)
 ```
 
-### Email Verification
-
-The system does NOT send verification pings. It relies on:
-- **Domain existence** (DNS resolution check)
-- **Known domain mapping** (50+ curated companies)
-- **Regex extraction** from career pages
+</details>
 
 ---
 
-## 8. Scoring Phase
+<details>
+<summary><strong>📊 8. Scoring Phase</strong></summary>
 
-**File:** `intelligence/`
-
-### Two-Stage Scoring
+Two-stage: Rules → LLM (if ambiguous)
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '14px'}}}%%
 flowchart TD
-    JOB[Job] --> RULES[Rule Scorer<br/>< 1ms per job]
-    RULES --> SCORE{Score ready?}
-    SCORE -->|Clear decision| DONE[Final Score]
-    SCORE -->|Ambiguous| LLM[Ollama Analysis<br/>2-5s per job]
+    JOB[Job] --> RULES[Rule Scorer]
+    RULES -->|Clear| DONE[Final Score]
+    RULES -->|Ambiguous| LLM[Ollama Analysis]
     LLM --> ADJUST[Adjust Score]
     ADJUST --> DONE
-
-    style JOB fill:#f59e0b,color:#000
-    style RULES fill:#22c55e,color:#000
-    style LLM fill:#a855f7,color:#fff
-    style DONE fill:#3b82f6,color:#fff
 ```
 
-### Rule-Based Scoring
-
-**File:** `intelligence/scorer.py`
+### Rule-Based (80% of jobs, <1ms each)
 
 ```python
 score = 0
-
-# 1. Role Match (30 points)
-if any(target_role.lower() in job.role.lower() 
-       for target_role in config.TARGET_ROLES):
-    score += 30
-
-# 2. Skills Match (20 points)
-matched_skills = [s for s in config.YOUR_SKILLS 
-                  if s.lower() in job.description.lower()]
-score += min(20, len(matched_skills) * 4)
-
-# 3. Location (15 points)
-if any(loc.lower() in job.location.lower() 
-       for loc in config.PREFERRED_LOCATIONS):
-    score += 15
-
-# 4. Company Stage (10 points)
-if job.company_stage in config.PREFERRED_COMPANY_STAGES:
-    score += 10
-
-# 5. Recency (15 points)
-if job.posted_date and (datetime.utcnow() - job.posted_date).days <= 7:
-    score += 15
-
-# 6. Salary Check (10 points)
-if job.salary_min and job.salary_min >= config.MIN_SALARY:
-    score += 10
++ 30  if target_role in job.role
++ 20  min(20, matched_skills * 4)
++ 15  if preferred_location in job.location
++ 10  if preferred_company_stage
++ 15  if posted within 7 days
++ 10  if salary >= minimum
 ```
 
-### LLM Analysis
-
-**File:** `intelligence/decider.py`
-
-When a job score falls in an ambiguous range, the system invokes Ollama:
+### LLM Analysis (20% near thresholds, 2-5s each)
 
 ```python
-class JobDecider:
-    def score_job(self, job: Job) -> tuple[int, str]:
-        rule_score = self.rules_scorer.score(job)
-
-        if self.needs_llm_analysis(rule_score):
-            llm_result = self.llm.analyze(job)
-            final_score = self.adjust_score(rule_score, llm_result)
-            reason = llm_result.get("reasoning", "")
-        else:
-            final_score = rule_score
-            reason = self.rules_scorer.get_reason(job)
-
-        return final_score, reason
+if needs_llm_analysis(rule_score):
+    llm_result = self.llm.analyze(job)
+    final_score = self.adjust_score(rule_score, llm_result)
 ```
+
+</details>
 
 ---
 
-## 9. Decision Phase
-
-**File:** `intelligence/decider.py`
-
-### Decision Thresholds
+<details>
+<summary><strong>🎯 9. Decision Phase</strong></summary>
 
 ```python
-if score >= config.APPLY_THRESHOLD:           # >= 75
-    return Decision.APPLY
-elif score >= config.APPLY_LATER_THRESHOLD:   # >= 50
-    return Decision.APPLY_LATER
-elif score >= config.WATCH_THRESHOLD:         # >= 30
-    return Decision.WATCH
-else:                                          # < 30
-    return Decision.SKIP
+if score >= 75:        return Decision.APPLY
+elif score >= 50:      return Decision.APPLY_LATER
+elif score >= 30:      return Decision.WATCH
+else:                  return Decision.SKIP
 ```
 
-### Decision Pipeline
+### State Machine
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '14px'}}}%%
 stateDiagram-v2
     [*] --> NEW
     NEW --> ENRICHED: Email found
     NEW --> DECIDED: No email → SKIP
     ENRICHED --> SCORED: Score calculated
     SCORED --> DECIDED: Decision made
-    DECIDED --> EMAIL_SENT: APPLY + has email
-    DECIDED --> SKIPPED: APPLY_LATER / WATCH / SKIP
-    
+    DECIDED --> EMAIL_SENT: APPLY + email
+    DECIDED --> SKIPPED: APPLY_LATER/WATCH/SKIP
     EMAIL_SENT --> FAILED: SMTP error
-    EMAIL_SENT --> [*]: Success
-    
-    SKIPPED --> [*]
-    FAILED --> [*]
 ```
 
-### Reasoning String
-
-Every decision includes a human-readable reason:
+### Reasoning Example
 
 ```
 "Role 'AI Engineer' matches target; 3 skills matched (Python, LangChain, RAG);
-Located in San Francisco; Startup stage preferred; Posted 2 days ago"
+Located in San Francisco; Posted 2 days ago"
 ```
+
+</details>
 
 ---
 
-## 10. Outreach Phase
-
-**File:** `outreach/`
-
-### Email Sender
-
-**File:** `outreach/sender.py`
+<details>
+<summary><strong>📨 10. Outreach Phase</strong></summary>
 
 ```python
 class EmailSender:
     def send_job_emails(self, jobs: List[Job]) -> int:
         sent = 0
         for job in jobs:
-            if job.decision != Decision.APPLY:
-                continue
-            if not job.email:
+            if job.decision != Decision.APPLY or not job.email:
                 continue
             if not self._rate_limit_ok():
                 break
-
             if self.dry_run:
-                logger.info(f"[DRY RUN] Would send to {job.email}")
                 continue
-
             success = self._send(job)
             if success:
                 sent += 1
-                time.sleep(EMAIL_DELAY_SECONDS)  # Human-like pacing
+                time.sleep(60)  # Human-like pacing
 ```
 
-### Rate Limiting
+### Rate Limits
 
 | Limit | Value | Reason |
 |-------|-------|--------|
-| Per hour | 5 emails | Gmail's sending threshold |
-| Per day | 20 emails | Avoid spam flagging |
-| Delay between | 60 seconds | Appear human |
+| Per hour | 5 emails | Gmail threshold |
+| Per day | 20 emails | Avoid spam |
+| Delay | 60 seconds | Appear human |
 
 ### Email Composer
 
-**File:** `outreach/composer.py`
+Generates HTML: gradient header → AI body → "Apply Now" CTA → footer with links.
 
-Generates personalized HTML emails:
-
-- **Header:** Gradient-styled with company name and role
-- **Body:** AI-generated paragraph explaining why the user is a good fit
-- **CTA:** "Apply Now" button linking to the job URL
-- **Footer:** Signature with links to GitHub, LinkedIn, portfolio
-
-### SMTP Configuration
-
-Connects to any SMTP server (default: Gmail):
+### SMTP
 
 ```python
-with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT) as server:
+with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
     server.starttls()
-    server.login(config.SMTP_USERNAME, config.SMTP_PASSWORD)
+    server.login(SMTP_USERNAME, SMTP_PASSWORD)
     server.send_message(msg)
 ```
 
+</details>
+
 ---
 
-## 11. Storage Phase
+<details>
+<summary><strong>💾 11. Storage Phase</strong></summary>
 
-**File:** `storage/`
-
-### Dual Storage Strategy
+Dual storage: CSV (primary) + SQLite (queryable).
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '14px'}}}%%
 flowchart LR
-    PIPELINE[Pipeline Engine] --> CSV[CSVStore<br/>Primary]
-    PIPELINE --> SQL[SQLiteStore<br/>Secondary]
-    
-    CSV --> HUMAN[Human-readable<br/>Git-friendly<br/>Excel-compatible]
-    SQL --> QUERY[Fast queries<br/>Aggregations<br/>Filtering]
-    
-    CSV --> BACKUP[Daily backups<br/>Keep 30 days]
-
-    style PIPELINE fill:#6366f1,color:#fff
-    style CSV fill:#059669,color:#fff
-    style SQL fill:#0284c7,color:#fff
-    style BACKUP fill:#d97706,color:#fff
+    PIPELINE --> CSV["CSVStore<br/>Primary source of truth"]
+    PIPELINE --> SQL["SQLiteStore<br/>Fast queries"]
+    CSV --> BACKUP["Daily backups<br/>Keep 30 days"]
 ```
 
 ### CSVStore
 
-**File:** `storage/csv_store.py`
-
-- **Primary source of truth**
-- Append-only (never modifies existing rows)
-- Each row = one job record
-- Supports: search, dedup lookup, stats aggregation
+- Append-only, never modifies rows
+- Human-readable, Git-friendly, Excel-compatible
+- Used for dedup lookup via `get_existing_job_ids()`
 
 ### SQLiteStore
 
-**File:** `storage/sqlite_store.py`
+- Filter by decision/date/source
+- Used by `status`, `stats`, `audit` commands
 
-- **Secondary query store**
-- Supports: filtering by decision, date, source
-- Used by: `status`, `stats`, `audit` CLI commands
-
-### Backup Mechanism
+### Backup
 
 ```python
 def backup(self):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = BACKUP_DIR / f"jobs_{timestamp}.csv"
-    shutil.copy2(CSV_FILE, backup_path)
-    self._cleanup_old_backups()  # Keep last 30 days
+    shutil.copy2(CSV_FILE, f"backups/jobs_{timestamp}.csv")
+    self._cleanup_old_backups()  # Keep last 30
 ```
+
+</details>
 
 ---
 
-## 12. Observability
-
-**File:** `observability/`
+<details>
+<summary><strong>👁️ 12. Observability</strong></summary>
 
 ### Logging
 
-**File:** `observability/logger.py`
-
-```python
-# Structured logging with levels:
-- DEBUG:   Detailed debugging information
-- INFO:    Pipeline milestones (started, completed)
-- WARNING: Expected failures (429, no email found)
-- ERROR:   Unexpected failures (network down, crash)
-```
+| Level | Output | Detail |
+|-------|--------|--------|
+| INFO+ | Console | Pipeline milestones |
+| DEBUG+ | File (`logs/jobctl.log`) | Everything |
+| ERROR | File + stderr | Failures + tracebacks |
 
 ### Metrics
 
-**File:** `observability/metrics.py`
-
-Tracks pipeline performance counters:
-
 ```python
-class Metrics:
-    jobs_collected: int
-    emails_sent: int
-    errors: int
-    source_stats: dict    # Per-source job counts
-    decision_stats: dict  # Per-decision counts
-    duration: float       # Wall clock time
+jobs_collected: int      # Per-source counts
+emails_sent: int         # Success count
+errors: int              # Failure count
+duration: float          # Wall clock time
 ```
 
 ### Circuit Breaker
 
-**File:** `observability/circuit_breaker.py`
-
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '14px'}}}%%
 stateDiagram-v2
     [*] --> CLOSED
-    CLOSED --> OPEN: 5 consecutive failures
+    CLOSED --> OPEN: 5 failures
     OPEN --> HALF_OPEN: 300s timeout
-    HALF_OPEN --> CLOSED: 1 successful request
-    HALF_OPEN --> OPEN: 1 failed request
-    
-    note right of CLOSED: Normal operation\nRequests pass through
-    note right of OPEN: Failing fast\nNo requests sent
-    note right of HALF_OPEN: Testing recovery\n1 probe request
+    HALF_OPEN --> CLOSED: 1 success
+    HALF_OPEN --> OPEN: 1 failure
 ```
 
 ```python
 class CircuitBreaker:
-    CLOSED = "CLOSED"      # Normal — requests pass
-    OPEN = "OPEN"          # Failing — requests rejected
-    HALF_OPEN = "HALF_OPEN"  # Testing — one probe request
-
     def call(self, fn):
         if self.state == self.OPEN:
             if self._cooldown_expired():
                 self.state = self.HALF_OPEN
             else:
                 raise CircuitBreakerOpen()
-
         try:
             result = fn()
             if self.state == self.HALF_OPEN:
-                self.state = self.CLOSED  # Recovery successful
+                self.state = self.CLOSED
             self.failures = 0
             return result
         except Exception:
@@ -755,75 +503,51 @@ class CircuitBreaker:
             raise
 ```
 
+</details>
+
 ---
 
-## 13. Error Handling & Reliability
+<details>
+<summary><strong>🛡️ 13. Error Handling & Reliability</strong></summary>
 
 ### Multi-Layer Defense
 
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '13px'}}}%%
-flowchart TD
-    subgraph Layer1["Layer 1: Circuit Breaker"]
-        CB[3 consecutive failures → Open circuit<br/>Reject all requests for 300s]
-    end
+| Layer | Mechanism | Effect |
+|-------|-----------|--------|
+| 1 | Circuit Breaker | 5 failures → pause 300s |
+| 2 | Retry Logic | Exponential backoff: 1s → 2s → 4s → 8s |
+| 3 | Partial Failure | Source A fails → Source B still runs |
+| 4 | Idempotency | SHA-256 hash, safe to re-run |
 
-    subgraph Layer2["Layer 2: Retry Logic"]
-        RL[Exponential backoff<br/>1s → 2s → 4s → 8s<br/>Max 3 retries]
-    end
+### Failure Scenarios
 
-    subgraph Layer3["Layer 3: Partial Failure"]
-        PF[Collector A fails → Collector B still runs<br/>Job 1 fails enrichment → Job 2 proceeds]
-    end
+| Scenario | Behavior |
+|----------|----------|
+| LinkedIn 429 | Retry 3x → circuit breaker opens |
+| Wellfound 403 | Circuit breaker opens, pipeline continues |
+| GitHub down | Other collectors still run |
+| Missing .env | Validator catches early, exits cleanly |
+| Ollama down | LLM skipped, rule-only scoring |
 
-    subgraph Layer4["Layer 4: Idempotency"]
-        ID[SHA-256 hash based on<br/>company + role + url<br/>Re-running is safe]
-    end
-
-    Layer1 --> Layer2 --> Layer3 --> Layer4
-
-    style Layer1 fill:#dc2626,color:#fff
-    style Layer2 fill:#d97706,color:#fff
-    style Layer3 fill:#7c3aed,color:#fff
-    style Layer4 fill:#059669,color:#fff
-```
-
-### What Happens When...
-
-| Scenario | System Behavior |
-|----------|----------------|
-| LinkedIn returns 429 | Retry 3x with backoff, then circuit breaker opens |
-| Wellfound returns 403 | Circuit breaker opens, pipeline continues |
-| GitHub API is down | Other collectors still run |
-| Email bounces | Logged, job marked FAILED, no retry |
-| CSV file locked | Error logged, process exits cleanly |
-| Ollama not running | LLM analysis skipped, rule-based only |
-| Missing .env field | Config validation catches it early |
+</details>
 
 ---
 
-## 14. CLI Commands Reference
+<details>
+<summary><strong>⌨️ 14. CLI Commands Reference</strong></summary>
 
 ### `python3 cli.py run`
 
-Full pipeline execution.
-
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--sources` / `-s` | `all` | Comma-separated sources to enable |
+| `--sources` / `-s` | `all` | Comma-separated sources |
 | `--dry-run` | `False` | Run without sending emails |
 
 ### `python3 cli.py status`
 
-7-day system health snapshot. Shows:
-- Total jobs collected
-- Emails sent / total
-- Decision breakdown
-- Source breakdown
+7-day health snapshot: total jobs, emails sent, decision/source breakdown.
 
 ### `python3 cli.py stats`
-
-Detailed statistics with time filtering.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -831,99 +555,54 @@ Detailed statistics with time filtering.
 
 ### `python3 cli.py audit`
 
-Browse job decisions.
-
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--decision` / `-d` | `None` | Filter: `APPLY`, `APPLY_LATER`, `WATCH`, `SKIP` |
-| `--limit` / `-n` | `20` | Max jobs to show |
+| `--decision` / `-d` | None | Filter: APPLY, SKIP, etc. |
+| `--limit` / `-n` | 20 | Max jobs to show |
 
 ### `python3 cli.py retry`
 
-Re-process failed jobs.
-
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--failed` | `False` | Must be set to retry |
-| `--limit` / `-n` | `10` | Max jobs to retry |
+| `--failed` | False | Must be set |
+| `--limit` / `-n` | 10 | Max jobs |
 
 ### `python3 cli.py config-check`
 
-Validates `.env` configuration. Exits with code 1 if invalid.
+Validates `.env`. Exits with code 1 if invalid.
 
 ### `python3 cli.py upload-resume <path>`
 
-Uploads a PDF resume to the system.
+Uploads PDF resume. Arg: path to your PDF file.
 
-| Argument | Description |
-|----------|-------------|
-| `resume_path` | Path to your PDF resume file |
+</details>
 
 ---
 
-## Data Flow Summary
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '12px', 'primaryColor': '#1e40af', 'primaryTextColor': '#fff', 'lineColor': '#6366f1'}}}%%
-flowchart TB
-    subgraph Input["📥 Input"]
-        A[.env Config]
-        B[Ollama LLM<br/>llama3.1:8b]
-        C[Resume PDF]
-    end
-
-    subgraph Pipeline["⚡ Pipeline"]
-        P1[Collect<br/>5 sources]
-        P2[Dedup<br/>SHA-256]
-        P3[Enrich<br/>Domain/Email]
-        P4[Score<br/>Rules→LLM]
-        P5[Decide<br/>Thresholds]
-        P6[Send<br/>SMTP]
-    end
-
-    subgraph Output["📤 Output"]
-        O1[Terminal Report<br/>Rich tables + charts]
-        O2[CSV File<br/>data/jobs.csv]
-        O3[SQLite DB<br/>data/jobs.db]
-        O4[Email Sent<br/>via Gmail SMTP]
-        O5[Logs<br/>logs/jobctl.log]
-    end
-
-    Input --> Pipeline
-    Pipeline --> Output
-
-    style Input fill:#f8fafc,stroke:#64748b
-    style Pipeline fill:#eef2ff,stroke:#6366f1
-    style Output fill:#f0fdf4,stroke:#22c55e
-```
-
----
-
-## Key Design Decisions
+<details>
+<summary><strong>⚡ Key Design Decisions</strong></summary>
 
 | Decision | Rationale |
 |----------|-----------|
 | CSV as primary store | Human-readable, git-friendly, no DB setup |
-| Rules before LLM | 80% of jobs decided in <1ms, zero API cost |
-| Local Ollama | No API costs, privacy, works offline |
-| SHA-256 dedup | Deterministic, collision-free, fast |
-| Circuit breakers | Prevent cascade failures from flaky sources |
+| Rules before LLM | 80% decided in <1ms, zero API cost |
+| Local Ollama | No API costs, privacy, offline |
+| SHA-256 dedup | Deterministic, collision-free |
+| Circuit breakers | Prevent cascade failures |
 | Partial failures | One broken source ≠ broken pipeline |
-| Rate limited email | Stay under spam thresholds, appear human |
+| Rate limited email | Avoid spam thresholds |
 | Dry-run mode | Safe testing without side effects |
 
----
-
-## Production Requirements
+### Requirements
 
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
 | RAM | 4 GB | 8 GB (for Ollama) |
 | Disk | 1 GB | 10 GB (logs + backups) |
 | CPU | 2 cores | 4 cores |
-| Ollama | llama3.1:8b | Any 7B+ model |
 | Python | 3.11 | 3.12 |
-| Network | Internet | Broadband |
+
+</details>
 
 ---
 
