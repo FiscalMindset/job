@@ -7,7 +7,6 @@ from bs4 import BeautifulSoup
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import re
 import ollama
 from playwright.sync_api import sync_playwright
 import time
@@ -19,7 +18,6 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.tree import Tree
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-from rich.layout import Layout
 from rich.text import Text
 from rich import box
 import config
@@ -233,7 +231,7 @@ class ProfileReportGenerator:
             progress.update(task, advance=20, description="[yellow]🌐 Launching browser for LinkedIn...")
             
             console.print(f"[dim]LinkedIn profile: {self.linkedin_username}[/dim]")
-            console.print(f"[yellow]🤖 Using browser automation (Playwright)[/yellow]")
+            console.print("[yellow]🤖 Using browser automation (Playwright)[/yellow]")
             
             with sync_playwright() as p:
                 # Launch browser in headless mode
@@ -259,9 +257,7 @@ class ProfileReportGenerator:
                     html = page.content()
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # Extract name and headline
                     name_elem = soup.find('h1', class_=lambda x: x and 'text-heading' in x)
-                    headline_elem = soup.find('div', class_=lambda x: x and 'text-body' in x)
                     
                     if name_elem:
                         console.print(f"[green]✓ Found profile: {name_elem.get_text(strip=True)}[/green]")
@@ -290,7 +286,7 @@ class ProfileReportGenerator:
                                         "keywords_found": [kw for kw in self.hiring_keywords if kw.lower() in post_text.lower()]
                                     }
                                     linkedin_data["hiring_opportunities"].append(hiring_post)
-                                    console.print(f"[red]🚨 Hiring opportunity detected![/red]")
+                                    console.print("[red]🚨 Hiring opportunity detected![/red]")
                     else:
                         console.print("[yellow]⚠️  No public activity found (may require login)[/yellow]")
                         linkedin_data["posts"].append({
@@ -323,7 +319,7 @@ class ProfileReportGenerator:
         except Exception as e:
             logger.error(f"LinkedIn analysis failed: {e}")
             console.print(f"[red]❌ LinkedIn analysis error: {e}[/red]")
-            progress.update(task, description=f"[yellow]⚠️  LinkedIn analysis limited")
+            progress.update(task, description="[yellow]⚠️  LinkedIn analysis limited")
             linkedin_data["posts"].append({
                 "text": f"Browser automation failed: {str(e)}\n\nTo fix:\n1. Ensure Playwright is installed: playwright install chromium\n2. Check browser permissions\n3. Try manual LinkedIn export",
                 "timestamp": datetime.utcnow().isoformat()

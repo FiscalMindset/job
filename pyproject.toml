@@ -30,6 +30,7 @@ dev = [
 
 [project.scripts]
 jobctl = "cli:app"
+jo = "cli:app"
 
 [build-system]
 requires = ["setuptools>=68.0"]
@@ -37,6 +38,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["core", "collectors", "intelligence", "enrichment", "outreach", "storage", "observability"]
+py-modules = ["cli", "config", "main"]
 
 [tool.black]
 line-length = 100
