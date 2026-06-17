@@ -1,6 +1,5 @@
 """Wellfound (AngelList Talent) jobs collector."""
 import httpx
-from bs4 import BeautifulSoup
 from typing import List
 
 from core.models import Job
@@ -13,142 +12,112 @@ logger = get_logger(__name__)
 
 
 class WellfoundCollector(BaseCollector):
-    """
-    Collect jobs from Wellfound (formerly AngelList Talent).
-    
-    URL: https://wellfound.com/jobs
-    
-    Strategy:
-    - Use public job search
-    - Filter by role and location
-    - Extract startup metadata
-    """
-    
+    API_BASE = "https://wellfound.com"
+    GRAPHQL_URL = f"{API_BASE}/graphql"
+
     def __init__(self):
         super().__init__("wellfound")
-        self.base_url = "https://wellfound.com"
-    
+
     def _collect_impl(self) -> List[Job]:
-        """Scrape Wellfound jobs."""
-        jobs = []
-        
-        # Wellfound has a GraphQL API - we can try that
-        # Or parse the HTML search results
-        
-        # Try GraphQL API first
-        api_jobs = self._try_graphql_api()
-        if api_jobs:
-            return api_jobs
-        
-        # Fallback to HTML scraping
-        search_url = f"{self.base_url}/role/r/software-engineer"
-        
-        with httpx.Client(timeout=config.REQUEST_TIMEOUT) as client:
-            response = client.get(
-                search_url,
-                headers={"User-Agent": config.USER_AGENT},
-                follow_redirects=True
-            )
-            response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'lxml')
-        
-        # Parse job listings (adjust selectors based on actual HTML)
-        job_cards = soup.find_all('div', class_='startup-job-listing')
-        
-        for card in job_cards[:40]:
-            try:
-                job = self._parse_job_card(card)
-                if job:
-                    jobs.append(job)
-            except Exception as e:
-                logger.debug(f"Failed to parse job: {e}")
-                continue
-        
-        return jobs
-    
+        jobs = self._try_graphql_api()
+        if jobs:
+            return jobs
+        logger.warning("Wellfound: GraphQL API failed, trying HTML scrape")
+        return self._try_html_scrape()
+
     def _try_graphql_api(self) -> List[Job]:
-        """
-        Try Wellfound's GraphQL API.
-        
-        Wellfound uses GraphQL - inspect network requests to find the query.
-        """
-        # Example GraphQL query (adjust based on actual API)
         query = """
-        query JobSearch($slug: String!) {
-          startupJobs(slug: $slug) {
+        query jobSearch($filter: JobFilters!) {
+          jobs(filter: $filter) {
             id
             title
-            locationNames
+            locations
             startup {
               name
-              companySize
+              size
+              stage
               slug
             }
+            url
           }
         }
         """
-        
+        roles = ["software-engineer", "backend-engineer", "full-stack-engineer", "ai-engineer", "ml-engineer"]
+        all_jobs: List[Job] = []
+
+        for role in roles[:2]:
+            try:
+                with httpx.Client(timeout=config.REQUEST_TIMEOUT) as client:
+                    resp = client.post(
+                        self.GRAPHQL_URL,
+                        json={
+                            "query": query,
+                            "variables": {"filter": {"slug": role, "page": 1}},
+                        },
+                        headers={
+                            "Content-Type": "application/json",
+                            "User-Agent": config.USER_AGENT,
+                            "Accept": "application/json",
+                        },
+                    )
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+                    jobs_data = data.get("data", {}).get("jobs", [])
+                    for item in jobs_data:
+                        startup = item.get("startup", {}) or {}
+                        job = Job(
+                            company=startup.get("name", "Unknown Startup"),
+                            role=item.get("title", ""),
+                            source=self.name,
+                            job_url=item.get("url", ""),
+                            location=", ".join(item.get("locations", [])) if item.get("locations") else "",
+                            company_size=startup.get("size", ""),
+                            company_stage=startup.get("stage", "startup"),
+                        )
+                        all_jobs.append(job)
+                    self._throttle()
+            except Exception as e:
+                logger.debug(f"Wellfound GraphQL failed for role '{role}': {e}")
+
+        return all_jobs
+
+    def _try_html_scrape(self) -> List[Job]:
+        from bs4 import BeautifulSoup
+        jobs: List[Job] = []
         try:
             with httpx.Client(timeout=config.REQUEST_TIMEOUT) as client:
-                response = client.post(
-                    f"{self.base_url}/graphql",
-                    json={
-                        "query": query,
-                        "variables": {"slug": "software-engineer"}
-                    },
-                    headers={
-                        "User-Agent": config.USER_AGENT,
-                        "Content-Type": "application/json"
-                    }
+                resp = client.get(
+                    f"{self.API_BASE}/jobs",
+                    headers=self._build_headers(),
+                    follow_redirects=True,
                 )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    return self._parse_graphql_response(data)
-        except:
-            pass
-        
-        return []
-    
-    def _parse_graphql_response(self, data: dict) -> List[Job]:
-        """Parse GraphQL response."""
-        jobs = []
-        
-        # Adjust based on actual response structure
-        job_data = data.get('data', {}).get('startupJobs', [])
-        
-        for item in job_data:
-            startup = item.get('startup', {})
-            
-            job = Job(
-                company=startup.get('name', ''),
-                role=item.get('title', ''),
-                source=self.name,
-                job_url=f"{self.base_url}/jobs/{item.get('id')}",
-                location=", ".join(item.get('locationNames', [])),
-                company_size=startup.get('companySize', ''),
-                company_stage="startup",
-            )
-            jobs.append(job)
-        
+                if resp.status_code != 200:
+                    return jobs
+                soup = BeautifulSoup(resp.text, "lxml")
+                cards = soup.find_all("div", class_="startup-job-listing")
+                for card in cards[:30]:
+                    try:
+                        title = card.find("h2")
+                        company = card.find("div", class_="company-name")
+                        link = card.find("a", href=True)
+                        if not (title and company and link):
+                            continue
+                        href = link["href"]
+                        if not href.startswith("http"):
+                            href = f"{self.API_BASE}{href}"
+                        jobs.append(Job(
+                            company=company.text.strip(),
+                            role=title.text.strip(),
+                            source=self.name,
+                            job_url=href,
+                            company_stage="startup",
+                        ))
+                    except Exception as e:
+                        logger.debug(f"Wellfound HTML parse error: {e}")
+        except Exception as e:
+            logger.error(f"Wellfound HTML scrape failed: {e}")
         return jobs
-    
-    def _parse_job_card(self, card) -> Job:
-        """Parse HTML job card."""
-        title = card.find('h2')
-        company = card.find('div', class_='company-name')
-        location = card.find('span', class_='location')
-        link = card.find('a', href=True)
-        
-        if not (title and company and link):
-            return None
-        
-        return Job(
-            company=company.text.strip(),
-            role=title.text.strip(),
-            source=self.name,
-            job_url=self.base_url + link['href'] if not link['href'].startswith('http') else link['href'],
-            location=location.text.strip() if location else "",
-            company_stage="startup",
-        )
+
+    def estimate_total_jobs(self) -> int:
+        return 60

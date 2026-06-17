@@ -1,7 +1,6 @@
-"""Resume handling and attachment functionality."""
+"""Resume handling with PDF parsing for experience extraction."""
 from pathlib import Path
 from typing import Optional
-import base64
 
 from observability.logger import get_logger
 import config
@@ -11,60 +10,60 @@ logger = get_logger(__name__)
 
 
 class ResumeHandler:
-    """Handle resume PDF for email attachments."""
-    
     def __init__(self, resume_path: Optional[str] = None):
-        self.resume_path = Path(resume_path or config.YOUR_RESUME) if resume_path or config.YOUR_RESUME else None
-        
-        if self.resume_path and not self.resume_path.exists():
-            logger.warning(f"Resume file not found: {self.resume_path}")
-            self.resume_path = None
-        elif self.resume_path:
-            logger.info(f"Resume loaded: {self.resume_path}")
-    
+        self.resume_path: Optional[Path] = None
+        path_str = resume_path or config.YOUR_RESUME
+        if path_str:
+            p = Path(path_str)
+            if p.exists():
+                self.resume_path = p
+                logger.info(f"Resume loaded: {p}")
+            else:
+                logger.warning(f"Resume not found: {p}")
+
     def has_resume(self) -> bool:
-        """Check if resume is available."""
         return self.resume_path is not None and self.resume_path.exists()
-    
+
     def get_resume_bytes(self) -> Optional[bytes]:
-        """Get resume file as bytes for email attachment."""
         if not self.has_resume():
             return None
-        
         try:
-            with open(self.resume_path, 'rb') as f:
-                return f.read()
+            return self.resume_path.read_bytes()
         except Exception as e:
             logger.error(f"Failed to read resume: {e}")
             return None
-    
+
     def get_resume_filename(self) -> str:
-        """Get resume filename."""
-        if not self.has_resume():
-            return "resume.pdf"
-        return self.resume_path.name
-    
+        return self.resume_path.name if self.has_resume() else "resume.pdf"
+
     def attach_to_email(self, msg) -> None:
-        """Attach resume to email message."""
         if not self.has_resume():
             return
-        
         try:
             from email.mime.application import MIMEApplication
-            
-            resume_bytes = self.get_resume_bytes()
-            if not resume_bytes:
+            data = self.get_resume_bytes()
+            if not data:
                 return
-            
-            attachment = MIMEApplication(resume_bytes, _subtype="pdf")
-            attachment.add_header(
-                'Content-Disposition',
-                'attachment',
-                filename=self.get_resume_filename()
-            )
+            attachment = MIMEApplication(data, _subtype="pdf")
+            attachment.add_header("Content-Disposition", "attachment", filename=self.get_resume_filename())
             msg.attach(attachment)
-            
             logger.debug(f"Attached resume: {self.get_resume_filename()}")
-            
         except Exception as e:
             logger.error(f"Failed to attach resume: {e}")
+
+    def extract_experience_text(self) -> str:
+        if not self.has_resume():
+            return ""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["pdftotext", str(self.resume_path), "-"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode == 0:
+                return result.stdout[:2000]
+        except FileNotFoundError:
+            logger.debug("pdftotext not available, skipping extraction")
+        except Exception as e:
+            logger.debug(f"PDF extraction failed: {e}")
+        return ""

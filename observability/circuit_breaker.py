@@ -1,7 +1,7 @@
-"""Circuit breaker pattern for fault tolerance."""
-from datetime import datetime, timedelta
+"""Circuit breaker pattern for fault tolerance with event hooks."""
+from datetime import datetime
 from enum import Enum
-from typing import Dict
+from typing import Dict, Optional, Callable
 
 from observability.logger import get_logger
 
@@ -10,102 +10,87 @@ logger = get_logger(__name__)
 
 
 class CircuitState(str, Enum):
-    """Circuit breaker states."""
-    CLOSED = "CLOSED"  # Normal operation
-    OPEN = "OPEN"  # Failing, reject all requests
-    HALF_OPEN = "HALF_OPEN"  # Testing if service recovered
+    CLOSED = "CLOSED"
+    OPEN = "OPEN"
+    HALF_OPEN = "HALF_OPEN"
 
 
 class CircuitBreaker:
-    """
-    Circuit breaker to prevent cascading failures.
-    
-    States:
-    - CLOSED: Normal operation, requests pass through
-    - OPEN: Too many failures, reject all requests
-    - HALF_OPEN: After timeout, try one request to test recovery
-    
-    Example:
-        If LinkedIn scraper fails 5 times in a row, stop trying
-        for 5 minutes, then test again.
-    """
-    
     def __init__(
         self,
         name: str,
         failure_threshold: int = 5,
-        timeout: int = 300  # seconds
+        timeout: int = 300,
+        on_state_change: Optional[Callable[[str, CircuitState, CircuitState], None]] = None,
     ):
         self.name = name
         self.failure_threshold = failure_threshold
         self.timeout = timeout
-        
+        self.on_state_change = on_state_change
         self.state = CircuitState.CLOSED
         self.failure_count = 0
-        self.last_failure_time = None
+        self.last_failure_time: Optional[datetime] = None
         self.success_count = 0
-    
+        self.total_calls = 0
+        self.total_failures = 0
+
     def can_execute(self) -> bool:
-        """Check if request can proceed."""
+        self.total_calls += 1
         if self.state == CircuitState.CLOSED:
             return True
-        
         if self.state == CircuitState.OPEN:
-            # Check if timeout has elapsed
             if self._should_attempt_reset():
-                logger.info(f"{self.name}: Circuit breaker moving to HALF_OPEN")
-                self.state = CircuitState.HALF_OPEN
+                self._set_state(CircuitState.HALF_OPEN)
                 return True
-            else:
-                return False
-        
+            return False
         if self.state == CircuitState.HALF_OPEN:
-            # Allow one test request
             return True
-        
         return False
-    
+
     def record_success(self) -> None:
-        """Record successful execution."""
         if self.state == CircuitState.HALF_OPEN:
-            logger.info(f"{self.name}: Circuit breaker CLOSED (service recovered)")
-            self.state = CircuitState.CLOSED
-        
+            self._set_state(CircuitState.CLOSED)
+            logger.info(f"{self.name}: Service recovered")
         self.failure_count = 0
         self.success_count += 1
-    
+
     def record_failure(self) -> None:
-        """Record failed execution."""
         self.failure_count += 1
+        self.total_failures += 1
         self.last_failure_time = datetime.utcnow()
-        
         if self.state == CircuitState.HALF_OPEN:
-            # Test failed, go back to OPEN
-            logger.warning(f"{self.name}: Circuit breaker OPEN (test failed)")
-            self.state = CircuitState.OPEN
-        
+            self._set_state(CircuitState.OPEN)
+            logger.warning(f"{self.name}: Test failed, back to OPEN")
         elif self.failure_count >= self.failure_threshold:
-            # Too many failures, open circuit
-            logger.error(
-                f"{self.name}: Circuit breaker OPEN "
-                f"({self.failure_count} failures >= {self.failure_threshold})"
-            )
-            self.state = CircuitState.OPEN
-    
+            self._set_state(CircuitState.OPEN)
+            logger.error(f"{self.name}: OPEN ({self.failure_count} failures)")
+
+    def _set_state(self, new_state: CircuitState) -> None:
+        old = self.state
+        self.state = new_state
+        if self.on_state_change:
+            self.on_state_change(self.name, old, new_state)
+
     def _should_attempt_reset(self) -> bool:
-        """Check if enough time has passed to attempt reset."""
         if not self.last_failure_time:
             return True
-        
         elapsed = (datetime.utcnow() - self.last_failure_time).total_seconds()
         return elapsed >= self.timeout
-    
-    def get_status(self) -> Dict[str, any]:
-        """Get circuit breaker status."""
+
+    def get_status(self) -> Dict:
         return {
             "name": self.name,
             "state": self.state.value,
             "failure_count": self.failure_count,
             "success_count": self.success_count,
+            "total_calls": self.total_calls,
+            "total_failures": self.total_failures,
+            "failure_rate": round((self.total_failures / max(self.total_calls, 1)) * 100, 1),
             "last_failure": self.last_failure_time.isoformat() if self.last_failure_time else None,
         }
+
+    def reset(self) -> None:
+        self.state = CircuitState.CLOSED
+        self.failure_count = 0
+        self.last_failure_time = None
+        logger.info(f"{self.name}: Manual reset to CLOSED")

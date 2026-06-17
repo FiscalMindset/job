@@ -2,13 +2,13 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import hashlib
 import json
+import re
 
 
 class Decision(str, Enum):
-    """Job application decision."""
     APPLY = "APPLY"
     APPLY_LATER = "APPLY_LATER"
     WATCH = "WATCH"
@@ -16,7 +16,6 @@ class Decision(str, Enum):
 
 
 class JobStatus(str, Enum):
-    """Job processing status."""
     NEW = "NEW"
     ENRICHED = "ENRICHED"
     SCORED = "SCORED"
@@ -28,77 +27,66 @@ class JobStatus(str, Enum):
 
 
 class EmailStatus(str, Enum):
-    """Email sending status."""
     NOT_SENT = "NOT_SENT"
     SENT = "SENT"
     FAILED = "FAILED"
     BOUNCED = "BOUNCED"
 
 
+class Confidence(float, Enum):
+    LOW = 0.3
+    MEDIUM = 0.6
+    HIGH = 0.85
+    VERY_HIGH = 0.95
+
+
 @dataclass
 class Job:
-    """Core job data model."""
-    
-    # Identity
     company: str
     role: str
     source: str
     job_url: str
-    
-    # Optional scraped data
     description: str = ""
     location: str = ""
     salary_min: Optional[int] = None
     salary_max: Optional[int] = None
+    currency: str = "USD"
+    salary_period: str = "yearly"
     company_size: str = ""
     company_stage: str = ""
+    company_industry: str = ""
     posted_date: Optional[datetime] = None
-    
-    # Contact info (populated by enrichment)
     email: str = ""
     email_confidence: float = 0.0
     hiring_manager: str = ""
-    
-    # Intelligence
     score: int = 0
     decision: Decision = Decision.SKIP
     reason: str = ""
-    
-    # Tracking
     job_id: str = field(default="", init=False)
     status: JobStatus = JobStatus.NEW
     applied_on: Optional[datetime] = None
     followup_on: Optional[datetime] = None
     email_status: EmailStatus = EmailStatus.NOT_SENT
     attempt_count: int = 0
-    
-    # Metadata
     scraped_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
     error_log: str = ""
-    
-    # LLM response cache
     llm_analysis: Dict[str, Any] = field(default_factory=dict)
-    
+    tags: List[str] = field(default_factory=list)
+
     def __post_init__(self) -> None:
-        """Generate job_id after initialization."""
         if not self.job_id:
             self.job_id = self.generate_id()
-    
+
     def generate_id(self) -> str:
-        """Generate deterministic job ID from core fields."""
-        # Normalize inputs
         company = self.company.lower().strip()
         role = self.role.lower().strip()
         url = self.job_url.lower().strip()
-        
-        # Create hash
         content = f"{company}|{role}|{url}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for storage."""
-        return {
+        result = {
             "job_id": self.job_id,
             "company": self.company,
             "role": self.role,
@@ -108,8 +96,11 @@ class Job:
             "location": self.location,
             "salary_min": self.salary_min,
             "salary_max": self.salary_max,
+            "currency": self.currency,
+            "salary_period": self.salary_period,
             "company_size": self.company_size,
             "company_stage": self.company_stage,
+            "company_industry": self.company_industry,
             "posted_date": self.posted_date.isoformat() if self.posted_date else None,
             "email": self.email,
             "email_confidence": self.email_confidence,
@@ -126,47 +117,50 @@ class Job:
             "updated_at": self.updated_at.isoformat(),
             "error_log": self.error_log,
             "llm_analysis": json.dumps(self.llm_analysis) if self.llm_analysis else "",
+            "tags": ",".join(self.tags),
         }
-    
+        return {k: v for k, v in result.items() if v is not None}
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Job":
-        """Create Job from dictionary."""
-        # Parse datetime fields
-        posted_date = None
-        if data.get("posted_date"):
-            posted_date = datetime.fromisoformat(data["posted_date"])
-        
-        applied_on = None
-        if data.get("applied_on"):
-            applied_on = datetime.fromisoformat(data["applied_on"])
-        
-        followup_on = None
-        if data.get("followup_on"):
-            followup_on = datetime.fromisoformat(data["followup_on"])
-        
-        scraped_at = datetime.fromisoformat(data["scraped_at"])
-        updated_at = datetime.fromisoformat(data["updated_at"])
-        
-        # Parse JSON fields
+        def _parse_dt(key: str) -> Optional[datetime]:
+            v = data.get(key)
+            if v:
+                try:
+                    return datetime.fromisoformat(v.replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    pass
+            return None
+
+        tags_raw = data.get("tags", "")
+        tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if isinstance(tags_raw, str) else (tags_raw or [])
+
+        llm_raw = data.get("llm_analysis", "")
         llm_analysis = {}
-        if data.get("llm_analysis"):
-            try:
-                llm_analysis = json.loads(data["llm_analysis"])
-            except json.JSONDecodeError:
-                pass
-        
+        if llm_raw:
+            if isinstance(llm_raw, str):
+                try:
+                    llm_analysis = json.loads(llm_raw)
+                except json.JSONDecodeError:
+                    pass
+            elif isinstance(llm_raw, dict):
+                llm_analysis = llm_raw
+
         return cls(
             company=data["company"],
             role=data["role"],
             source=data["source"],
-            job_url=data["job_url"],
+            job_url=data.get("job_url", ""),
             description=data.get("description", ""),
             location=data.get("location", ""),
             salary_min=data.get("salary_min"),
             salary_max=data.get("salary_max"),
+            currency=data.get("currency", "USD"),
+            salary_period=data.get("salary_period", "yearly"),
             company_size=data.get("company_size", ""),
             company_stage=data.get("company_stage", ""),
-            posted_date=posted_date,
+            company_industry=data.get("company_industry", ""),
+            posted_date=_parse_dt("posted_date"),
             email=data.get("email", ""),
             email_confidence=float(data.get("email_confidence", 0.0)),
             hiring_manager=data.get("hiring_manager", ""),
@@ -174,20 +168,45 @@ class Job:
             decision=Decision(data.get("decision", "SKIP")),
             reason=data.get("reason", ""),
             status=JobStatus(data.get("status", "NEW")),
-            applied_on=applied_on,
-            followup_on=followup_on,
+            applied_on=_parse_dt("applied_on"),
+            followup_on=_parse_dt("followup_on"),
             email_status=EmailStatus(data.get("email_status", "NOT_SENT")),
             attempt_count=int(data.get("attempt_count", 0)),
-            scraped_at=scraped_at,
-            updated_at=updated_at,
+            scraped_at=_parse_dt("scraped_at") or datetime.utcnow(),
+            updated_at=_parse_dt("updated_at") or datetime.utcnow(),
             error_log=data.get("error_log", ""),
             llm_analysis=llm_analysis,
+            tags=tags,
         )
+
+    def is_remote(self) -> bool:
+        return bool(self.location and "remote" in self.location.lower())
+
+    def days_since_posted(self) -> Optional[int]:
+        if self.posted_date:
+            return (datetime.utcnow() - self.posted_date).days
+        return None
+
+    def has_email(self) -> bool:
+        return bool(self.email and re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', self.email))
+
+    def short_summary(self) -> str:
+        return f"{self.company} - {self.role} ({self.score}/100, {self.decision.value})"
+
+    def __lt__(self, other: "Job") -> bool:
+        return self.score < other.score
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Job):
+            return NotImplemented
+        return self.job_id == other.job_id
+
+    def __hash__(self) -> int:
+        return hash(self.job_id)
 
 
 @dataclass
 class PipelineResult:
-    """Result of a pipeline execution."""
     jobs_collected: int = 0
     jobs_deduplicated: int = 0
     jobs_enriched: int = 0
@@ -197,10 +216,10 @@ class PipelineResult:
     errors: int = 0
     duration_seconds: float = 0.0
     source_stats: Dict[str, int] = field(default_factory=dict)
-    all_jobs: list = field(default_factory=list)  # Store all collected jobs for email details
-    
+    all_jobs: list = field(default_factory=list)
+    phase_timings: Dict[str, float] = field(default_factory=dict)
+
     def summary(self) -> str:
-        """Generate human-readable summary."""
         lines = [
             f"Pipeline completed in {self.duration_seconds:.1f}s",
             f"Collected: {self.jobs_collected} jobs",
@@ -210,18 +229,31 @@ class PipelineResult:
             "",
             "Decisions:",
         ]
-        
         for decision, count in self.decisions_made.items():
             lines.append(f"  {decision.value}: {count}")
-        
         lines.append(f"\nEmails sent: {self.emails_sent}")
-        
         if self.errors > 0:
             lines.append(f"Errors: {self.errors}")
-        
         if self.source_stats:
             lines.append("\nSources:")
             for source, count in self.source_stats.items():
                 lines.append(f"  {source}: {count}")
-        
+        if self.phase_timings:
+            lines.append("\nPhase Timings:")
+            for phase, secs in sorted(self.phase_timings.items(), key=lambda x: -x[1]):
+                lines.append(f"  {phase}: {secs:.1f}s")
         return "\n".join(lines)
+
+    @property
+    def apply_rate(self) -> float:
+        total = sum(self.decisions_made.values())
+        if total == 0:
+            return 0.0
+        applies = self.decisions_made.get(Decision.APPLY, 0)
+        return (applies / total) * 100
+
+    @property
+    def enrichment_rate(self) -> float:
+        if self.jobs_deduplicated == 0:
+            return 0.0
+        return (self.jobs_enriched / self.jobs_deduplicated) * 100
