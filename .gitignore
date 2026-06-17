@@ -24,6 +24,12 @@ backups/
 *.swo
 .DS_Store
 
+# macOS resource forks
+._*
+
+# uv
+uv.lock
+
 # Debugging
 raw_html/
 debug/

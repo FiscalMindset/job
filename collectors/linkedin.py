@@ -1,172 +1,118 @@
 """LinkedIn jobs collector."""
 import httpx
 from bs4 import BeautifulSoup
-from typing import List
+from typing import List, Optional
 import urllib.parse
 import time
-from datetime import datetime, timedelta
+import re
 
 from core.models import Job
 from collectors.base import BaseCollector
 from observability.logger import get_logger
-from rich.console import Console
-from rich.panel import Panel
 import config
 
 
 logger = get_logger(__name__)
-console = Console()
 
 
 class LinkedInCollector(BaseCollector):
-    """
-    Collect jobs from LinkedIn.
-    
-    Strategy:
-    - Use public job search URLs (no auth required)
-    - Parse job listings
-    - Limited to ~25 jobs per search without login
-    
-    Note: LinkedIn actively blocks scrapers. Consider:
-    - Rotating user agents
-    - Adding delays between requests
-    - Using Playwright for JS rendering
-    - Using LinkedIn session cookie (if available)
-    """
-    
+    SEARCH_BASE = "https://www.linkedin.com/jobs/search"
+    JOB_BASE = "https://www.linkedin.com/jobs/view"
+
     def __init__(self):
         super().__init__("linkedin")
-        self.base_url = "https://www.linkedin.com"
-    
+        self.session_cookie = config.LINKEDIN_SESSION_COOKIE
+
     def _collect_impl(self) -> List[Job]:
-        """Scrape LinkedIn jobs."""
-        all_jobs = []
-        
-        # Build search query
-        keywords = " OR ".join(config.TARGET_ROLES)
+        all_jobs: List[Job] = []
+        keywords = " OR ".join(config.TARGET_ROLES) if config.TARGET_ROLES else "software engineer"
         location = config.PREFERRED_LOCATIONS[0] if config.PREFERRED_LOCATIONS else "United States"
-        
-        # Scrape multiple pages
+
         for page in range(config.LINKEDIN_MAX_PAGES):
-            # LinkedIn job search URL with pagination
+            self._throttle()
             search_url = self._build_search_url(keywords, location, page)
-            
-            # Show beautiful progress panel
-            console.print(Panel(
-                f"[cyan]🔍 Scraping LinkedIn[/cyan]\n\n"
-                f"[yellow]Page:[/yellow] {page + 1}/{config.LINKEDIN_MAX_PAGES}\n"
-                f"[yellow]Keywords:[/yellow] {keywords}\n"
-                f"[yellow]Location:[/yellow] {location}\n"
-                f"[yellow]URL:[/yellow] [link={search_url}]{search_url[:80]}...[/link]",
-                title=f"[bold cyan]LinkedIn Collector[/bold cyan]",
-                border_style="cyan"
-            ))
-            
-            # Fetch with retries
             html = self._fetch_with_retry(search_url)
             if not html:
-                logger.warning(f"Failed to fetch LinkedIn page {page + 1}")
                 continue
-            
-            # Parse jobs
-            soup = BeautifulSoup(html, 'lxml')
-            job_cards = soup.find_all('div', class_='base-card')
-            
-            console.print(f"[green]✓[/green] Found {len(job_cards)} jobs on page {page + 1}\n")
-            
-            if len(job_cards) == 0:
-                logger.warning(f"No jobs found on page {page + 1}, stopping pagination")
+
+            soup = BeautifulSoup(html, "lxml")
+            job_cards = soup.find_all("div", class_="base-card")
+            if not job_cards:
+                job_cards = soup.find_all("li", class_=re.compile(r"jobs-search-results__list-item"))
+            if not job_cards:
+                logger.warning(f"LinkedIn: No jobs found on page {page + 1}, stopping")
                 break
-            
+
             for card in job_cards:
                 try:
                     job = self._parse_job_card(card)
                     if job:
                         all_jobs.append(job)
                 except Exception as e:
-                    logger.debug(f"Failed to parse job card: {e}")
-                    continue
-            
-            # Add delay between pages to be respectful
-            import time
-            time.sleep(2)
-        
-        logger.info(f"LinkedIn: Total jobs collected: {len(all_jobs)}")
+                    logger.debug(f"LinkedIn: Failed to parse card: {e}")
+
+            time.sleep(1.5)
+
+        logger.info(f"LinkedIn: Collected {len(all_jobs)} jobs")
         return all_jobs
-    
+
     def _build_search_url(self, keywords: str, location: str, page: int = 0) -> str:
-        """Build LinkedIn job search URL."""
         params = {
-            'keywords': keywords,
-            'location': location,
-            'f_TPR': 'r86400',  # Last 24 hours
-            'f_E': '1,2',  # Entry level & Associate
-            'position': '1',
-            'pageNum': str(page),
-            'start': str(page * 25),  # LinkedIn shows 25 jobs per page
+            "keywords": keywords,
+            "location": location,
+            "f_TPR": "r86400",
+            "f_E": "1,2",
+            "position": "1",
+            "pageNum": str(page),
+            "start": str(page * 25),
         }
-        
-        query_string = urllib.parse.urlencode(params)
-        return f"{self.base_url}/jobs/search?{query_string}"
-    
-    def _fetch_with_retry(self, url: str) -> str:
-        """Fetch URL with retries."""
-        headers = {
-            "User-Agent": config.USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-        }
-        
-        # Add session cookie if available
+        return f"{self.SEARCH_BASE}?{urllib.parse.urlencode(params)}"
+
+    def _fetch_with_retry(self, url: str) -> Optional[str]:
         cookies = {}
-        if config.LINKEDIN_SESSION_COOKIE:
-            cookies['li_at'] = config.LINKEDIN_SESSION_COOKIE
-        
+        if self.session_cookie:
+            cookies["li_at"] = self.session_cookie
+
         with httpx.Client(timeout=config.REQUEST_TIMEOUT, cookies=cookies) as client:
             for attempt in range(config.MAX_RETRIES):
                 try:
-                    response = client.get(url, headers=headers, follow_redirects=True)
-                    
-                    if response.status_code == 200:
-                        return response.text
-                    
-                    logger.warning(f"LinkedIn returned {response.status_code}, attempt {attempt + 1}")
-                    
+                    resp = client.get(url, headers=self._build_headers(), follow_redirects=True)
+                    if resp.status_code == 200:
+                        return resp.text
+                    if resp.status_code == 429:
+                        logger.warning(f"LinkedIn rate limited (attempt {attempt + 1})")
+                        self._exponential_backoff(attempt)
+                        continue
+                    logger.warning(f"LinkedIn returned {resp.status_code}")
+                except httpx.TimeoutException:
+                    logger.warning(f"LinkedIn timeout (attempt {attempt + 1})")
+                    self._exponential_backoff(attempt)
                 except Exception as e:
-                    logger.warning(f"Request failed, attempt {attempt + 1}: {e}")
-                
-                # Wait before retry
-                import time
-                time.sleep(config.RETRY_DELAY)
-        
+                    logger.warning(f"LinkedIn request failed: {e}")
+                    self._exponential_backoff(attempt)
         return None
-    
-    def _parse_job_card(self, card) -> Job:
-        """Parse a LinkedIn job card."""
-        # Extract elements
-        title_elem = card.find('h3', class_='base-search-card__title')
-        company_elem = card.find('h4', class_='base-search-card__subtitle')
-        location_elem = card.find('span', class_='job-search-card__location')
-        link_elem = card.find('a', class_='base-card__full-link')
-        date_elem = card.find('time')
-        
-        if not (title_elem and company_elem and link_elem):
+
+    def _parse_job_card(self, card) -> Optional[Job]:
+        title_elem = card.find("h3", class_="base-search-card__title")
+        company_elem = card.find("h4", class_="base-search-card__subtitle")
+        location_elem = card.find("span", class_="job-search-card__location")
+        link_elem = card.find("a", class_="base-card__full-link")
+        date_elem = card.find("time")
+
+        if not title_elem or not company_elem:
             return None
-        
-        # Extract text
+
         title = title_elem.text.strip()
         company = company_elem.text.strip()
         location = location_elem.text.strip() if location_elem else ""
-        job_url = link_elem['href']
-        
-        # Parse date
+        job_url = link_elem["href"] if link_elem else ""
+        if job_url and not job_url.startswith("http"):
+            job_url = f"https://www.linkedin.com{job_url}"
+
         posted_date = None
-        if date_elem and date_elem.get('datetime'):
-            posted_date = self._parse_posted_date(date_elem['datetime'])
-        
+        if date_elem and date_elem.get("datetime"):
+            posted_date = self._parse_posted_date(date_elem["datetime"])
+
         return Job(
             company=company,
             role=title,
@@ -175,3 +121,6 @@ class LinkedInCollector(BaseCollector):
             location=location,
             posted_date=posted_date,
         )
+
+    def estimate_total_jobs(self) -> int:
+        return config.LINKEDIN_MAX_PAGES * 25
